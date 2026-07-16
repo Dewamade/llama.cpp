@@ -1168,37 +1168,61 @@ struct common_speculative_impl_draft_dspark : public common_speculative_impl {
             GGML_ASSERT(pos.front() == (int32_t) L        && "dspark: staged rows do not start at the drafter's cache position");
             GGML_ASSERT(pos.back()  == (int32_t) start - 1 && "dspark: staged rows do not end just before the anchor position");
 
-            const int64_t n_tokens = ctx_len + block_size;
-            if (n_tokens > n_batch_max) {
+            if (n_batch_max < block_size + 1) {
                 if (!warned_batch_limit[seq_id]) {
-                    LOG_WRN("%s: seq %d round needs %lld tokens > n_batch=%lld -- skipping draft rounds (silently degrading to plain AR)\n",
-                            __func__, (int) seq_id, (long long) n_tokens, (long long) n_batch_max);
+                    LOG_WRN("%s: seq %d draft model n_batch=%lld is too small for block_size=%d -- skipping draft rounds\n",
+                            __func__, (int) seq_id, (long long) n_batch_max, block_size);
                     warned_batch_limit[seq_id] = true;
                 }
                 continue;
             }
 
-            llama_set_dspark_ctx(ctx_dft, feat.data(), ctx_len, n_embd_cap);
+            int32_t rc = 0;
+            int64_t offset = 0;
+            while (offset < ctx_len) {
+                int64_t remaining_ctx = ctx_len - offset;
+                if (remaining_ctx + block_size <= n_batch_max) {
+                    // This is the last chunk, process it together with the actual draft block!
+                    int64_t chunk_len = remaining_ctx;
+                    llama_set_dspark_ctx(ctx_dft, feat.data() + offset * n_embd_cap, chunk_len, n_embd_cap);
 
-            common_batch_clear(batch);
-            for (int64_t i = 0; i < ctx_len; ++i) {
-                // dummy token id: this row's real content comes from the
-                // staged dspark ctx feature above, not the token embedding
-                // (see src/models/dspark.cpp -- these columns are sliced away
-                // before the residual stream even forms). logits=false: this
-                // impl never reads output for context rows.
-                common_batch_add(batch, /* token = */ 0, (llama_pos)(L + i), { seq_id }, /* logits = */ false);
-            }
-            // block position 0 is seeded with the REAL last-accepted token
-            // (the "anchor"), NOT mask_token_id -- matches the Python reference
-            // reference's evaluator._propose (draft_input_ids[:,0] =
-            // output_ids[:,start]). Positions 1..block_size-1 are masked.
-            common_batch_add(batch, dp.id_last, (llama_pos) start, { seq_id }, /* logits = */ true);
-            for (int32_t k = 1; k < block_size; ++k) {
-                common_batch_add(batch, mask_token_id, (llama_pos)(start + k), { seq_id }, /* logits = */ true);
-            }
+                    common_batch_clear(batch);
+                    for (int64_t i = 0; i < chunk_len; ++i) {
+                        common_batch_add(batch, /* token = */ 0, (llama_pos)(L + offset + i), { seq_id }, /* logits = */ false);
+                    }
+                    common_batch_add(batch, dp.id_last, (llama_pos) start, { seq_id }, /* logits = */ true);
+                    for (int32_t k = 1; k < block_size; ++k) {
+                        common_batch_add(batch, mask_token_id, (llama_pos)(start + k), { seq_id }, /* logits = */ true);
+                    }
 
-            const int32_t rc = llama_decode(ctx_dft, batch);
+                    rc = llama_decode(ctx_dft, batch);
+                    offset += chunk_len;
+                    break;
+                } else {
+                    // Process a chunk of context rows with a single dummy draft token.
+                    int64_t chunk_len = std::min(remaining_ctx, (int64_t) n_batch_max - 1);
+                    llama_set_dspark_ctx(ctx_dft, feat.data() + offset * n_embd_cap, chunk_len, n_embd_cap);
+
+                    common_batch_clear(batch);
+                    for (int64_t i = 0; i < chunk_len; ++i) {
+                        common_batch_add(batch, /* token = */ 0, (llama_pos)(L + offset + i), { seq_id }, /* logits = */ false);
+                    }
+                    // Add 1 dummy draft token at the end
+                    common_batch_add(batch, mask_token_id, (llama_pos)(L + offset + chunk_len), { seq_id }, /* logits = */ false);
+
+                    rc = llama_decode(ctx_dft, batch);
+                    if (rc != 0) {
+                        break;
+                    }
+
+                    // Discard the KV cache entry for the dummy draft token
+                    if (!llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, (llama_pos)(L + offset + chunk_len), -1)) {
+                        LOG_ERR("%s: failed to crop chunk dummy draft token KV for seq %d\n", __func__, (int) seq_id);
+                    }
+
+                    offset += chunk_len;
+                }
+            }
 
             // always clear the staged ctx immediately after use, success or not.
             llama_set_dspark_ctx(ctx_dft, nullptr, 0, 0);
