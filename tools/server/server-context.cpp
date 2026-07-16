@@ -1045,15 +1045,17 @@ private:
                 // If the drafter's batch cannot fit ctx_len + block_size, the
                 // round is skipped ("round needs N tokens > n_batch") and
                 // speculation silently degrades to plain AR.
-                const uint32_t n_batch_dspark = cparams.n_ctx + (block_size > 0 ? block_size : 64);
+                //
+                // Cap draft n_batch to prevent allocation of multi-gigabyte compute graph buffers.
+                const uint32_t max_draft_batch = 8192;
+                uint32_t n_batch_dspark = cparams.n_ctx + (block_size > 0 ? block_size : 64);
+                n_batch_dspark = std::min(n_batch_dspark, max_draft_batch);
                 if (cparams.n_batch < n_batch_dspark) {
                     SRV_INF("draft-dspark: raising draft ctx n_batch %u -> %u (full-context staging + block)\n",
                             cparams.n_batch, n_batch_dspark);
                     cparams.n_batch = n_batch_dspark;
                 }
-                if (cparams.n_ubatch < cparams.n_batch) {
-                    cparams.n_ubatch = cparams.n_batch;
-                }
+                cparams.n_ubatch = std::min(std::max(cparams.n_ubatch, cparams.n_batch), max_draft_batch);
             }
 
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
