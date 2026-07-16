@@ -148,8 +148,17 @@ int main(int argc, char ** argv) {
                                            COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK) != params.speculative.types.end();
         if (spec_dspark) {
             const uint32_t block_size = read_dspark_block_size(params.speculative.draft.mparams.path);
-            cparams.n_batch  = std::max(cparams.n_batch,  cparams.n_ctx + (block_size > 0 ? block_size : 64));
-            cparams.n_ubatch = std::max(cparams.n_ubatch, cparams.n_batch);
+            
+            // Cap draft n_batch to prevent allocation of multi-gigabyte compute graph buffers
+            const uint32_t max_draft_batch = 8192; 
+            
+            uint32_t target_batch = cparams.n_ctx + (block_size > 0 ? block_size : 64);
+            target_batch = std::min(target_batch, max_draft_batch);
+        
+            cparams.n_batch  = std::max(cparams.n_batch,  target_batch);
+            cparams.n_ubatch = std::min(std::max(cparams.n_ubatch, cparams.n_batch), max_draft_batch);
+            
+            LOG_INF("draft-dspark: bounded draft batch limits to n_batch=%u, n_ubatch=%u\n", cparams.n_batch, cparams.n_ubatch);
         }
 
         ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
