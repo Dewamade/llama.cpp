@@ -3593,6 +3593,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.draft.n_min = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MIN"));
+    add_opt(common_arg(
+        {"--max-draft-b"}, "N",
+        string_format("maximum batch size for the draft model (default: %d)", params.speculative.draft.max_batch),
+        [](common_params & params, int value) {
+            params.speculative.draft.max_batch = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_MAX_DRAFT_B"));
 
     add_opt(common_arg(
         {"--spec-draft-p-split", "--draft-p-split"}, "P",

@@ -903,6 +903,8 @@ struct common_speculative_impl_draft_dspark : public common_speculative_impl {
     // regardless of who proposed a given round's tokens.
     std::vector<int64_t> rows_since_accept;
 
+    std::vector<bool> warned_batch_limit;
+
     // process()'s per-seq contiguous-range bookkeeping (mirrors draft-mtp).
     std::vector<int32_t> i_batch_beg;
     std::vector<int32_t> i_batch_end;
@@ -1007,6 +1009,7 @@ struct common_speculative_impl_draft_dspark : public common_speculative_impl {
         ctx_feat.assign(n_seq, {});
         ctx_pos.assign(n_seq, {});
         rows_since_accept.assign(n_seq, 0);
+        warned_batch_limit.assign(n_seq, false);
         i_batch_beg.assign(n_seq, -1);
         i_batch_end.assign(n_seq, -1);
     }
@@ -1033,6 +1036,7 @@ struct common_speculative_impl_draft_dspark : public common_speculative_impl {
         ctx_feat[seq_id].clear();
         ctx_pos[seq_id].clear();
         rows_since_accept[seq_id] = 0;
+        warned_batch_limit[seq_id] = false;
 
         llama_memory_seq_rm(llama_get_memory(params.ctx_dft), seq_id, 0, -1);
     }
@@ -1166,8 +1170,11 @@ struct common_speculative_impl_draft_dspark : public common_speculative_impl {
 
             const int64_t n_tokens = ctx_len + block_size;
             if (n_tokens > n_batch_max) {
-                LOG_ERR("%s: seq %d round needs %lld tokens > n_batch=%lld -- skipping\n",
-                        __func__, (int) seq_id, (long long) n_tokens, (long long) n_batch_max);
+                if (!warned_batch_limit[seq_id]) {
+                    LOG_WRN("%s: seq %d round needs %lld tokens > n_batch=%lld -- skipping draft rounds (silently degrading to plain AR)\n",
+                            __func__, (int) seq_id, (long long) n_tokens, (long long) n_batch_max);
+                    warned_batch_limit[seq_id] = true;
+                }
                 continue;
             }
 

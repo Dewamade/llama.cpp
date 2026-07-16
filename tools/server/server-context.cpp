@@ -1047,7 +1047,7 @@ private:
                 // speculation silently degrades to plain AR.
                 //
                 // Cap draft n_batch to prevent allocation of multi-gigabyte compute graph buffers.
-                const uint32_t max_draft_batch = 8192;
+                const uint32_t max_draft_batch = params_spec.max_batch > 0 ? (uint32_t) params_spec.max_batch : 0xFFFFFFFF;
                 uint32_t n_batch_dspark = cparams.n_ctx + (block_size > 0 ? block_size : 64);
                 n_batch_dspark = std::min(n_batch_dspark, max_draft_batch);
                 if (cparams.n_batch < n_batch_dspark) {

@@ -150,7 +150,7 @@ int main(int argc, char ** argv) {
             const uint32_t block_size = read_dspark_block_size(params.speculative.draft.mparams.path);
             
             // Cap draft n_batch to prevent allocation of multi-gigabyte compute graph buffers
-            const uint32_t max_draft_batch = 8192; 
+            const uint32_t max_draft_batch = params.speculative.draft.max_batch > 0 ? (uint32_t) params.speculative.draft.max_batch : 0xFFFFFFFF; 
             
             uint32_t target_batch = cparams.n_ctx + (block_size > 0 ? block_size : 64);
             target_batch = std::min(target_batch, max_draft_batch);
